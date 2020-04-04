@@ -60,22 +60,37 @@ subroutine RPN_COMM_simple_halo_parms(grid, row, col)
   return
 end subroutine RPN_COMM_simple_halo_parms
 
-subroutine RPN_COMM_simple_halo_8(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy,async)
+subroutine RPN_COMM_simple_halo_8(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy,redblack)
   implicit none
   integer, intent(IN)    :: minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy
   integer, intent(INOUT), dimension(2*minx-1:2*maxx,miny:maxy,nk) :: g
-  logical, intent(IN) :: async
-  call RPN_COMM_simple_halo(g,2*minx-1,2*maxx,miny,maxy,2*lni,lnj,nk,2*halox,haloy,async)
+  logical, intent(IN) :: redblack
+  call RPN_COMM_simple_halo(g,2*minx-1,2*maxx,miny,maxy,2*lni,lnj,nk,2*halox,haloy,redblack)
 end subroutine RPN_COMM_simple_halo_8
 
-subroutine RPN_COMM_simple_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy,async)
+! RED/BLACK method, only synchronous send and recv
+!   West -> East move
+!     EVEN PEs
+!       if not East PE send to odd PE at East 
+!       if not West PE recv from odd PE at West 
+!     ODD PEs
+!                      recv from even PE at West
+!       if not East PE send to even PE at East
+!   West <- East move
+!     EVEN PEs
+!       if not East PE recv from odd PE at East
+!       if not West PE send to odd PE at West
+!     ODD PEs
+!                      send to even PE at West
+!       if not East PE recv from even PE at East
+subroutine RPN_COMM_simple_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy,redblack)
   use ISO_C_BINDING
   use simple_halo_cache
   implicit none
   include 'mpif.h'
   integer, intent(IN)    :: minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy
   integer, intent(INOUT), dimension(minx:maxx,miny:maxy,nk) :: g
-  logical, intent(IN) :: async
+  logical, intent(IN) :: redblack    ! if true, use fully synchronous (no sendrecv) algorithm
 
   integer :: i, j, k, nw, ier
   integer, dimension(MPI_STATUS_SIZE) :: status
@@ -98,21 +113,43 @@ subroutine RPN_COMM_simple_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy,asy
     enddo
     enddo
     t(2) = cpu_real_time_ticks()
-    if(rankx .eq. 0)then             ! west PE, send to east, get from east
-      call MPI_SENDRECV(halo_to_east  , nw, MPI_INTEGER, rankx+1, rankx, &
-                        halo_from_east, nw, MPI_INTEGER, rankx+1, rankx+1, &
-                        rowcom, STATUS, ier)
-    elseif(rankx .lt. sizex-1) then  ! middle PE, (get from west, send to east) (get from east, send to west)
-      call MPI_SENDRECV(halo_to_east  , nw, MPI_INTEGER, rankx+1, rankx, &
-                        halo_from_west, nw, MPI_INTEGER, rankx-1, rankx-1, &
-                        rowcom, STATUS, ier)
-      call MPI_SENDRECV(halo_to_west  , nw, MPI_INTEGER, rankx-1, rankx, &
-                        halo_from_east, nw, MPI_INTEGER, rankx+1, rankx+1, &
-                        rowcom, STATUS, ier)
-    else                             ! east PE, send to west, get from west
-      call MPI_SENDRECV(halo_to_west  , nw, MPI_INTEGER, rankx-1, rankx, &
-                        halo_from_west, nw, MPI_INTEGER, rankx-1, rankx-1, &
-                        rowcom, STATUS, ier)
+    if(redblack)then   ! reb/black method, West -> East then West <- East
+      if(iand(rankx,1) .eq. 0) then   ! even ranks 
+        if(rankx < sizex-1) call MPI_Send(halo_to_east  , nw, MPI_INTEGER, rankx+1, rankx, &
+                            rowcom,ier) ! send to east if not east PE      (West -> East)
+        if(rankx > 0)       call MPI_Recv(halo_from_west, nw, MPI_INTEGER, rankx-1, rankx-1, &
+                            rowcom, STATUS,ier) ! recv from west if not west
+        if(rankx < sizex-1) call MPI_Recv(halo_from_east, nw, MPI_INTEGER, rankx+1, rankx+1, &
+                            rowcom, STATUS,ier) ! receive from east if not east PE (West <- East)
+        if(rankx > 0)       call MPI_Send(halo_to_west  , nw, MPI_INTEGER, rankx-1, rankx, &
+                            rowcom,ier) ! send to west if not west PE
+      else                            ! odd ranks
+                            call MPI_Recv(halo_from_west, nw, MPI_INTEGER, rankx-1, rankx-1, &
+                            rowcom, STATUS,ier)    ! receive from west             (West -> East)
+        if(rankx < sizex-1) call MPI_Send(halo_to_east  , nw, MPI_INTEGER, rankx+1, rankx, &
+                            rowcom,ier)    ! send to east if not east PE
+                            call MPI_Send(halo_to_west  , nw, MPI_INTEGER, rankx-1, rankx, &
+                            rowcom,ier)    ! send to west                  (West <- East)
+        if(rankx < sizex-1) call MPI_Recv(halo_from_east, nw, MPI_INTEGER, rankx+1, rankx+1, &
+                            rowcom, STATUS,ier)    ! receive from east if not east PE
+      endif
+    else
+      if(rankx .eq. 0)then             ! west PE, send to east, get from east
+	call MPI_SENDRECV(halo_to_east  , nw, MPI_INTEGER, rankx+1, rankx, &
+			  halo_from_east, nw, MPI_INTEGER, rankx+1, rankx+1, &
+			  rowcom, STATUS, ier)
+      elseif(rankx .lt. sizex-1) then  ! middle PE, (get from west, send to east) (get from east, send to west)
+	call MPI_SENDRECV(halo_to_east  , nw, MPI_INTEGER, rankx+1, rankx, &
+			  halo_from_west, nw, MPI_INTEGER, rankx-1, rankx-1, &
+			  rowcom, STATUS, ier)
+	call MPI_SENDRECV(halo_to_west  , nw, MPI_INTEGER, rankx-1, rankx, &
+			  halo_from_east, nw, MPI_INTEGER, rankx+1, rankx+1, &
+			  rowcom, STATUS, ier)
+      else                             ! east PE, send to west, get from west
+	call MPI_SENDRECV(halo_to_west  , nw, MPI_INTEGER, rankx-1, rankx, &
+			  halo_from_west, nw, MPI_INTEGER, rankx-1, rankx-1, &
+			  rowcom, STATUS, ier)
+      endif
     endif
     t(3) = cpu_real_time_ticks()
     do k = 1, nk          ! insert west and east side of array simultaneously
@@ -181,7 +218,7 @@ program test_simple_halo
   integer :: i, j, k, offx, offy, l, m, larg1, larg2, larg3, stat1, stat2, stat3, rowcomm, colcomm
   integer :: ilo, ihi, jlo, jhi
   character(len=128) :: argv1, argv2, argv3
-  logical :: printit
+  logical :: printit, redblack
   real(kind=8) :: t1, t2
 
   call MPI_Init(ier)
@@ -192,16 +229,20 @@ program test_simple_halo
   if(stat1 .ne. 0 .or. stat2 .ne. 0) goto 777
   read(argv1,*,err=777)sizex,sizey
   read(argv2,*,err=777)NI, NJ, NK, halox, haloy
+  redblack = .false.
   if(stat3 .eq. 0) then
     printit = argv3(1:1) .eq. 't'
+    redblack = argv3(2:2) .eq. 'r'
   else
     argv3 = 't'
   endif
+
   allocate (z(1-halox:NI+halox,1-haloy:NJ+haloy,NK))
 
   call MPI_comm_size(MPI_COMM_WORLD, petot, ier)
   call MPI_comm_rank(MPI_COMM_WORLD, ranktot, ier)
   if(sizex*sizey .ne. petot) goto 777
+  if(ranktot == 0) print *,'redblack =',redblack
   ranky = ranktot / sizex
   rankx = mod(ranktot,sizex)
   do l=0,petot-1
@@ -223,11 +264,11 @@ program test_simple_halo
   enddo
   enddo
   call MPI_Barrier(MPI_COMM_WORLD,ier)
-  call RPN_COMM_simple_halo(z,1-halox,NI+halox,1-haloy,NJ+haloy,NI,NJ,NK,halox,haloy,.false.)
+  call RPN_COMM_simple_halo(z,1-halox,NI+halox,1-haloy,NJ+haloy,NI,NJ,NK,halox,haloy,redblack)
   call reset_halo_timings
   t1 = MPI_Wtime()
   do i = 1, 20
-    call RPN_COMM_simple_halo(z,1-halox,NI+halox,1-haloy,NJ+haloy,NI,NJ,NK,halox,haloy,.false.)
+    call RPN_COMM_simple_halo(z,1-halox,NI+halox,1-haloy,NJ+haloy,NI,NJ,NK,halox,haloy,redblack)
   enddo
   t2 = MPI_Wtime()
   call print_halo_timings
