@@ -10,12 +10,14 @@
 ! * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 ! * Lesser General Public License for more details.
 
+#if ! defined(SELF_TEST)
 module RPN_COMM_halo_cache
   integer, save :: gridcom, rowcom, colcom
   integer, save :: rankx, ranky, sizex, sizey
-  integer(kind=8), dimension(6) :: ts = [0,0,0,0,0,0]
+  integer(kind=8), dimension(8) :: ts = [0,0,0,0,0,0,0,0]
   integer, save :: nhalo = 0
-  logical, save :: redblack = .false.  ! if true, use fully synchronous (no sendrecv) algorithm
+  logical, save :: redblack = .false.  ! if true, use fully synchronous (send, recv, no sendrecv) method
+  logical, save :: async    = .false.  ! if true, use fully asynchronous (isend, irecv)  method
 end module RPN_COMM_halo_cache
 
 function RPN_COMM_get_halo_timings(t,n) result(nt)
@@ -26,9 +28,9 @@ function RPN_COMM_get_halo_timings(t,n) result(nt)
   integer :: nt
   t(1:n) = -1
   nt = -1
-  if(n < 6) return
+  if(n < 8) return
   nt = nhalo
-  t(1:6) = ts
+  t(1:8) = ts
 end function RPN_COMM_get_halo_timings
 
 subroutine RPN_COMM_reset_halo_timings
@@ -41,8 +43,31 @@ end subroutine RPN_COMM_reset_halo_timings
 subroutine RPN_COMM_print_halo_timings
   use RPN_COMM_halo_cache
   implicit none
-  write(6,1)'nhalo, times =',nhalo,ts/nhalo
-  call flush(6)
+  include 'mpif.h'
+  integer(kind=8), dimension(:,:), allocatable :: allts
+  integer :: ier, ntot, i
+  integer(kind=8), dimension(8) :: tsavg, tsmax, tsmin
+  ntot = sizex*sizey
+  if(rankx == 0 .and. ranky == 0) then
+    allocate(allts(8,ntot))
+  else
+    allocate(allts(8,1))
+  endif
+  call MPI_Gather(ts, 8, MPI_INTEGER8, allts, 8, MPI_INTEGER8, 0, gridcom, ier)
+  do i = 1, 8
+    tsavg(i) = sum(allts(i,:))
+    tsmax(i) = maxval(allts(i,:))
+    tsmin(i) = minval(allts(i,:))
+  enddo
+  tsavg = tsavg / ntot
+  if(rankx == 0 .and. ranky == 0) then
+    write(6,1)'nhalo, avg times =     nexch    peel-J    mesg-x    plug-J    peel-I    mesg-y    plug-I    exch-x    exch-y'
+    write(6,1)'nhalo, avg times =',nhalo,tsavg/nhalo
+    write(6,1)'min times        =          ',tsmin/nhalo
+    write(6,1)'max times        =          ',tsmax/nhalo
+    call flush(6)
+  endif
+  
 1 format(a,10I10)
 end subroutine RPN_COMM_print_halo_timings
 
@@ -61,6 +86,8 @@ subroutine RPN_COMM_simple_halo_parms(grid, row, col, mode)
   call MPI_comm_size(colcom, sizey, ier)  ! size of column
   call MPI_comm_rank(colcom, ranky, ier)  ! rank in column
   redblack = trim(mode) .eq. 'REDBLACK'
+  async    = trim(mode) .eq. 'ASYNC'
+  if(rankx+ranky == 0) write(6,*) 'MODE = '//trim(mode)
   return
 end subroutine RPN_COMM_simple_halo_parms
 
@@ -68,7 +95,6 @@ subroutine RPN_COMM_simple_halo_8(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy)
   implicit none
   integer, intent(IN)    :: minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy
   integer, intent(INOUT), dimension(2*minx-1:2*maxx,miny:maxy,nk) :: g
-  logical, intent(IN) :: redblack
   call RPN_COMM_simple_halo(g,2*minx-1,2*maxx,miny,maxy,2*lni,lnj,nk,2*halox,haloy)
 end subroutine RPN_COMM_simple_halo_8
 
@@ -106,9 +132,11 @@ subroutine RPN_COMM_simple_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy)
 
   t = 0
   nhalo = nhalo + 1
+!   call mpi_barrier(gridcom, ier)
   if(sizex .gt. 1) then   ! is there an exchange along x ?
+!     call MPI_Barrier(rowcom,ier)
+    nw = halox * lnj * nk       ! message length
     t(1) = cpu_real_time_ticks()
-    nw = halox * lnj * nk
     do k = 1, nk          ! peel west and east side of array simultaneously
     do j = 1, lnj
       halo_to_west(:,j,k) = g(1:halox        ,j,k)    ! extract west side inner halo
@@ -116,43 +144,21 @@ subroutine RPN_COMM_simple_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy)
     enddo
     enddo
     t(2) = cpu_real_time_ticks()
-    if(redblack)then   ! reb/black method, West -> East then West <- East
-      if(iand(rankx,1) .eq. 0) then   ! even ranks 
-        if(rankx < sizex-1) call MPI_Send(halo_to_east  , nw, MPI_INTEGER, rankx+1, rankx, &
-                            rowcom,ier) ! send to east if not east PE      (West -> East)
-        if(rankx > 0)       call MPI_Recv(halo_from_west, nw, MPI_INTEGER, rankx-1, rankx-1, &
-                            rowcom, STATUS,ier) ! recv from west if not west
-        if(rankx < sizex-1) call MPI_Recv(halo_from_east, nw, MPI_INTEGER, rankx+1, rankx+1, &
-                            rowcom, STATUS,ier) ! receive from east if not east PE (West <- East)
-        if(rankx > 0)       call MPI_Send(halo_to_west  , nw, MPI_INTEGER, rankx-1, rankx, &
-                            rowcom,ier) ! send to west if not west PE
-      else                            ! odd ranks
-                            call MPI_Recv(halo_from_west, nw, MPI_INTEGER, rankx-1, rankx-1, &
-                            rowcom, STATUS,ier)    ! receive from west             (West -> East)
-        if(rankx < sizex-1) call MPI_Send(halo_to_east  , nw, MPI_INTEGER, rankx+1, rankx, &
-                            rowcom,ier)    ! send to east if not east PE
-                            call MPI_Send(halo_to_west  , nw, MPI_INTEGER, rankx-1, rankx, &
-                            rowcom,ier)    ! send to west                  (West <- East)
-        if(rankx < sizex-1) call MPI_Recv(halo_from_east, nw, MPI_INTEGER, rankx+1, rankx+1, &
-                            rowcom, STATUS,ier)    ! receive from east if not east PE
-      endif
-    else
-      if(rankx .eq. 0)then             ! west PE, send to east, get from east
-	call MPI_SENDRECV(halo_to_east  , nw, MPI_INTEGER, rankx+1, rankx, &
-			  halo_from_east, nw, MPI_INTEGER, rankx+1, rankx+1, &
-			  rowcom, STATUS, ier)
-      elseif(rankx .lt. sizex-1) then  ! middle PE, (get from west, send to east) (get from east, send to west)
-	call MPI_SENDRECV(halo_to_east  , nw, MPI_INTEGER, rankx+1, rankx, &
-			  halo_from_west, nw, MPI_INTEGER, rankx-1, rankx-1, &
-			  rowcom, STATUS, ier)
-	call MPI_SENDRECV(halo_to_west  , nw, MPI_INTEGER, rankx-1, rankx, &
-			  halo_from_east, nw, MPI_INTEGER, rankx+1, rankx+1, &
-			  rowcom, STATUS, ier)
-      else                             ! east PE, send to west, get from west
-	call MPI_SENDRECV(halo_to_west  , nw, MPI_INTEGER, rankx-1, rankx, &
-			  halo_from_west, nw, MPI_INTEGER, rankx-1, rankx-1, &
-			  rowcom, STATUS, ier)
-      endif
+    if(rankx .eq. 0)then             ! west PE, send to east, get from east
+      call MPI_SENDRECV(halo_to_east  , nw, MPI_INTEGER, rankx+1, rankx, &
+			halo_from_east, nw, MPI_INTEGER, rankx+1, rankx+1, &
+			rowcom, STATUS, ier)
+    elseif(rankx .lt. sizex-1) then  ! middle PE, (get from west, send to east) (get from east, send to west)
+      call MPI_SENDRECV(halo_to_east  , nw, MPI_INTEGER, rankx+1, rankx, &
+			halo_from_west, nw, MPI_INTEGER, rankx-1, rankx-1, &
+			rowcom, STATUS, ier)
+      call MPI_SENDRECV(halo_to_west  , nw, MPI_INTEGER, rankx-1, rankx, &
+			halo_from_east, nw, MPI_INTEGER, rankx+1, rankx+1, &
+			rowcom, STATUS, ier)
+    else                             ! east PE, send to west, get from west
+      call MPI_SENDRECV(halo_to_west  , nw, MPI_INTEGER, rankx-1, rankx, &
+			halo_from_west, nw, MPI_INTEGER, rankx-1, rankx-1, &
+			rowcom, STATUS, ier)
     endif
     t(3) = cpu_real_time_ticks()
     do k = 1, nk          ! insert west and east side of array simultaneously
@@ -164,6 +170,7 @@ subroutine RPN_COMM_simple_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy)
     t(4) = cpu_real_time_ticks()
   endif
   if(sizey .gt. 1) then   ! is there an exchange along y ?
+!     call MPI_Barrier(colcom, ier)
     t(5) = cpu_real_time_ticks()
     nw = (lni + 2*halox) * haloy * nk
     do k = 1, nk          ! peel north and south side of array
@@ -173,9 +180,6 @@ subroutine RPN_COMM_simple_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy)
     enddo
     enddo
     t(6) = cpu_real_time_ticks()
-!   MPI_SENDRECV(SENDBUF, SENDCOUNT, SENDTYPE, DEST, SENDTAG,     ! sendtag is my rank
-!                RECVBUF, RECVCOUNT, RECVTYPE, SOURCE, RECVTAG,   ! recvtag is sender rank
-!                COMM, STATUS, IERROR)
     if(ranky .eq. 0) then                ! south PE, send to north, receive from north
       call MPI_SENDRECV(halo_to_north  , nw, MPI_INTEGER, ranky+1, ranky, &
                         halo_from_north, nw, MPI_INTEGER, ranky+1, ranky+1, &
@@ -203,8 +207,10 @@ subroutine RPN_COMM_simple_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy)
   endif
   ts(1:3) = ts(1:3) + t(2:4)-t(1:3)
   ts(4:6) = ts(4:6) + t(6:8)-t(5:7)
+  ts(7) = ts(7) + t(4) - t(1)
+  ts(8) = ts(8) + t(8) - t(5)
 end subroutine RPN_COMM_simple_halo
-
+#endif
 #if defined(SELF_TEST)
 program test_simple_halo
   use ISO_C_BINDING
@@ -215,14 +221,16 @@ program test_simple_halo
 !   integer, parameter :: NK = 1
 !   integer, parameter :: halox = 1
 !   integer, parameter :: haloy = 1
+  integer, parameter :: NXCH = 100
   integer :: NI, NJ, NK, halox, haloy
   integer, dimension(:,:,:), allocatable :: z
   integer :: rankx, sizex, ranky, sizey, ier, petot, ranktot, errors
   integer :: i, j, k, offx, offy, l, m, larg1, larg2, larg3, stat1, stat2, stat3, rowcomm, colcomm
   integer :: ilo, ihi, jlo, jhi
   character(len=128) :: argv1, argv2, argv3, mode
-  logical :: printit, redblack, yfirst
+  logical :: printit, redblack, yfirst, async
   real(kind=8) :: t1, t2
+  real(kind=8), dimension(NXCH) :: txch
 
   call MPI_Init(ier)
   printit = .false.
@@ -232,16 +240,19 @@ program test_simple_halo
   if(stat1 .ne. 0 .or. stat2 .ne. 0) goto 777
   read(argv1,*,err=777)sizex,sizey
   read(argv2,*,err=777)NI, NJ, NK, halox, haloy
-  mode = 'NORMAL'
+  mode = 'DEFAULT'
   yfirst = .false.
   if(stat3 .eq. 0) then
     printit  = argv3(1:1) .eq. 't'  ! print arrays
     redblack = argv3(2:2) .eq. 'r'  ! use red/black method
+    async    = argv3(2:2) .eq. 'a'  ! use async method
     yfirst   = argv3(3:3) .eq. 'y'  ! y first, then x
   else
     argv3 = 't'
   endif
   if(redblack) mode = 'REDBLACK'
+  if(async)    mode = 'ASYNC'
+  printit = printit .and. ni*nj < 30
 
   allocate (z(1-halox:NI+halox,1-haloy:NJ+haloy,NK))
 
@@ -263,14 +274,15 @@ program test_simple_halo
   call MPI_Comm_split(MPI_COMM_WORLD, ranky, ranktot, rowcomm,ier)
   call MPI_Comm_split(MPI_COMM_WORLD, rankx, ranktot, colcomm,ier)
 
-  call RPN_COMM_simple_halo_parms(MPI_COMM_WORLD, rowcomm, colcomm, redblack)
+  call RPN_COMM_simple_halo_parms(MPI_COMM_WORLD, rowcomm, colcomm, mode)
+
   offy = ranky * NJ
   offx = rankx * NI
   z = 0
   do k=1,NK
   do j=1,NJ
   do i=1,NI
-    z(i,j,k) = 1000000*(i+offx) + 1000*(j+offy) + k
+    z(i,j,k) = 1000000*mod(i+offx,256) + 1000*mod(j+offy,256) + k
   enddo
   enddo
   enddo
@@ -278,20 +290,24 @@ program test_simple_halo
   call RPN_COMM_simple_halo(z,1-halox,NI+halox,1-haloy,NJ+haloy,NI,NJ,NK,halox,haloy)
   call RPN_COMM_reset_halo_timings
   call MPI_Barrier(MPI_COMM_WORLD,ier)
-  t1 = MPI_Wtime()
-  do i = 1, 20
+
+  do i = 1, NXCH
+    call MPI_Barrier(MPI_COMM_WORLD,ier)
+    t1 = MPI_Wtime()
     call RPN_COMM_simple_halo(z,1-halox,NI+halox,1-haloy,NJ+haloy,NI,NJ,NK,halox,haloy)
+    txch(i) = MPI_Wtime() - t1
   enddo
+  txch = txch * 1000000   ! convert to microseconds
   call MPI_Barrier(MPI_COMM_WORLD,ier)
-  t2 = MPI_Wtime()
-  call MPI_Barrier(MPI_COMM_WORLD,ier)
-  do i = 0, petot-1, petot/16
-    if(ranktot .eq. i) call RPN_COMM_print_halo_timings
-  enddo
+
+  call RPN_COMM_print_halo_timings
+!   do i = 0, petot-1, max(petot/16,1)
+!     if(ranktot .eq. i) call RPN_COMM_print_halo_timings
+!   enddo
   call MPI_Barrier(MPI_COMM_WORLD,ier)
   if(printit) then
     do m = sizey-1, 0, -1
-    do l = 0, sizex -1
+    do l = sizex-1, 0, -1
       if(ranktot .eq. l+m*sizex)then
 	write(6,*)"PE(",rankx,',',ranky,')'
 	do j=NJ+haloy,1-haloy,-1
@@ -314,13 +330,13 @@ program test_simple_halo
   do k = 1, nk
   do j = jlo, jhi
   do i = ilo, ihi
-    if(z(i,j,k) .ne. 1000000*(i+offx) + 1000*(j+offy) + k) errors = errors + 1
+    if(z(i,j,k) .ne. 1000000*mod(i+offx,256) + 1000*mod(j+offy,256) + k) errors = errors + 1
   enddo
   enddo
   enddo
   call flush(6)
   call MPI_Barrier(MPI_COMM_WORLD,ier)
-  if(ranktot .eq. 0) write(6,*)'time per exchange =',nint((t2-t1) * 100000.0),' microseconds'
+  if(ranktot .eq. 0) write(6,*)'avg/min/max per exchange =',sum(txch)/NXCH,minval(txch),maxval(txch),' microseconds'
   if(errors .ne. 0) write(6,*)'rank, ERRORS =',ranktot, errors
 777 continue
   call MPI_Finalize(ier)
