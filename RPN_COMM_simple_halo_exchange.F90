@@ -10,15 +10,16 @@
 ! * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 ! * Lesser General Public License for more details.
 
-module simple_halo_cache
+module RPN_COMM_halo_cache
   integer, save :: gridcom, rowcom, colcom
   integer, save :: rankx, ranky, sizex, sizey
   integer(kind=8), dimension(6) :: ts = [0,0,0,0,0,0]
   integer, save :: nhalo = 0
-end module simple_halo_cache
+  logical, save :: redblack = .false.  ! if true, use fully synchronous (no sendrecv) algorithm
+end module RPN_COMM_halo_cache
 
-function get_halo_timings(t,n) result(nt)
-  use simple_halo_cache
+function RPN_COMM_get_halo_timings(t,n) result(nt)
+  use RPN_COMM_halo_cache
   implicit none
   integer, intent(IN) :: n
   integer(kind=8), dimension(n), intent(OUT) :: t
@@ -28,27 +29,29 @@ function get_halo_timings(t,n) result(nt)
   if(n < 6) return
   nt = nhalo
   t(1:6) = ts
-end function get_halo_timings
+end function RPN_COMM_get_halo_timings
 
-subroutine reset_halo_timings
-  use simple_halo_cache
+subroutine RPN_COMM_reset_halo_timings
+  use RPN_COMM_halo_cache
   implicit none
   nhalo = 0
   ts = 0
-end subroutine reset_halo_timings
+end subroutine RPN_COMM_reset_halo_timings
 
-subroutine print_halo_timings
-  use simple_halo_cache
+subroutine RPN_COMM_print_halo_timings
+  use RPN_COMM_halo_cache
   implicit none
-  print 1,'nhalo, times =',nhalo,ts/nhalo
+  write(6,1)'nhalo, times =',nhalo,ts/nhalo
+  call flush(6)
 1 format(a,10I10)
-end subroutine print_halo_timings
+end subroutine RPN_COMM_print_halo_timings
 
 ! set communicators for halo exchange
-subroutine RPN_COMM_simple_halo_parms(grid, row, col)
-  use simple_halo_cache
+subroutine RPN_COMM_simple_halo_parms(grid, row, col, mode)
+  use RPN_COMM_halo_cache
   implicit none
   integer, intent(IN) :: grid, row, col
+  character(len=*), intent(IN) :: mode   
   integer :: ier
   gridcom = grid  ! grid communicator
   rowcom  = row   ! row communicator
@@ -57,15 +60,16 @@ subroutine RPN_COMM_simple_halo_parms(grid, row, col)
   call MPI_comm_rank(rowcom, rankx, ier)  ! rank in row
   call MPI_comm_size(colcom, sizey, ier)  ! size of column
   call MPI_comm_rank(colcom, ranky, ier)  ! rank in column
+  redblack = trim(mode) .eq. 'REDBLACK'
   return
 end subroutine RPN_COMM_simple_halo_parms
 
-subroutine RPN_COMM_simple_halo_8(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy,redblack)
+subroutine RPN_COMM_simple_halo_8(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy)
   implicit none
   integer, intent(IN)    :: minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy
   integer, intent(INOUT), dimension(2*minx-1:2*maxx,miny:maxy,nk) :: g
   logical, intent(IN) :: redblack
-  call RPN_COMM_simple_halo(g,2*minx-1,2*maxx,miny,maxy,2*lni,lnj,nk,2*halox,haloy,redblack)
+  call RPN_COMM_simple_halo(g,2*minx-1,2*maxx,miny,maxy,2*lni,lnj,nk,2*halox,haloy)
 end subroutine RPN_COMM_simple_halo_8
 
 ! RED/BLACK method, only synchronous send and recv
@@ -83,14 +87,13 @@ end subroutine RPN_COMM_simple_halo_8
 !     ODD PEs
 !                      send to even PE at West
 !       if not East PE recv from even PE at East
-subroutine RPN_COMM_simple_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy,redblack)
+subroutine RPN_COMM_simple_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy)
   use ISO_C_BINDING
-  use simple_halo_cache
+  use RPN_COMM_halo_cache
   implicit none
   include 'mpif.h'
   integer, intent(IN)    :: minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy
   integer, intent(INOUT), dimension(minx:maxx,miny:maxy,nk) :: g
-  logical, intent(IN) :: redblack    ! if true, use fully synchronous (no sendrecv) algorithm
 
   integer :: i, j, k, nw, ier
   integer, dimension(MPI_STATUS_SIZE) :: status
@@ -217,8 +220,8 @@ program test_simple_halo
   integer :: rankx, sizex, ranky, sizey, ier, petot, ranktot, errors
   integer :: i, j, k, offx, offy, l, m, larg1, larg2, larg3, stat1, stat2, stat3, rowcomm, colcomm
   integer :: ilo, ihi, jlo, jhi
-  character(len=128) :: argv1, argv2, argv3
-  logical :: printit, redblack
+  character(len=128) :: argv1, argv2, argv3, mode
+  logical :: printit, redblack, yfirst
   real(kind=8) :: t1, t2
 
   call MPI_Init(ier)
@@ -229,30 +232,38 @@ program test_simple_halo
   if(stat1 .ne. 0 .or. stat2 .ne. 0) goto 777
   read(argv1,*,err=777)sizex,sizey
   read(argv2,*,err=777)NI, NJ, NK, halox, haloy
-  redblack = .false.
+  mode = 'NORMAL'
+  yfirst = .false.
   if(stat3 .eq. 0) then
-    printit = argv3(1:1) .eq. 't'
-    redblack = argv3(2:2) .eq. 'r'
+    printit  = argv3(1:1) .eq. 't'  ! print arrays
+    redblack = argv3(2:2) .eq. 'r'  ! use red/black method
+    yfirst   = argv3(3:3) .eq. 'y'  ! y first, then x
   else
     argv3 = 't'
   endif
+  if(redblack) mode = 'REDBLACK'
 
   allocate (z(1-halox:NI+halox,1-haloy:NJ+haloy,NK))
 
   call MPI_comm_size(MPI_COMM_WORLD, petot, ier)
   call MPI_comm_rank(MPI_COMM_WORLD, ranktot, ier)
   if(sizex*sizey .ne. petot) goto 777
-  if(ranktot == 0) print *,'redblack =',redblack
-  ranky = ranktot / sizex
-  rankx = mod(ranktot,sizex)
+  if(ranktot == 0) write(6,*)'redblack =',redblack
+  if(yfirst) then
+    rankx = ranktot / sizey
+    ranky = mod(ranktot,sizey)
+  else
+    ranky = ranktot / sizex
+    rankx = mod(ranktot,sizex)
+  endif
   do l=0,petot-1
-    if(ranktot .eq. l .and. argv3(1:1) .eq. 't') print 2,'ranktot, petot, rankx, ranky =',ranktot+1, petot, rankx, ranky
+    if(ranktot .eq. l .and. argv3(1:1) .eq. 't') write(6,2)'ranktot, petot, rankx, ranky =',ranktot+1, petot, rankx, ranky
     call MPI_Barrier(MPI_COMM_WORLD,ier)
   enddo
   call MPI_Comm_split(MPI_COMM_WORLD, ranky, ranktot, rowcomm,ier)
   call MPI_Comm_split(MPI_COMM_WORLD, rankx, ranktot, colcomm,ier)
 
-  call RPN_COMM_simple_halo_parms(MPI_COMM_WORLD, rowcomm, colcomm)
+  call RPN_COMM_simple_halo_parms(MPI_COMM_WORLD, rowcomm, colcomm, redblack)
   offy = ranky * NJ
   offx = rankx * NI
   z = 0
@@ -264,20 +275,25 @@ program test_simple_halo
   enddo
   enddo
   call MPI_Barrier(MPI_COMM_WORLD,ier)
-  call RPN_COMM_simple_halo(z,1-halox,NI+halox,1-haloy,NJ+haloy,NI,NJ,NK,halox,haloy,redblack)
-  call reset_halo_timings
+  call RPN_COMM_simple_halo(z,1-halox,NI+halox,1-haloy,NJ+haloy,NI,NJ,NK,halox,haloy)
+  call RPN_COMM_reset_halo_timings
+  call MPI_Barrier(MPI_COMM_WORLD,ier)
   t1 = MPI_Wtime()
   do i = 1, 20
-    call RPN_COMM_simple_halo(z,1-halox,NI+halox,1-haloy,NJ+haloy,NI,NJ,NK,halox,haloy,redblack)
+    call RPN_COMM_simple_halo(z,1-halox,NI+halox,1-haloy,NJ+haloy,NI,NJ,NK,halox,haloy)
   enddo
+  call MPI_Barrier(MPI_COMM_WORLD,ier)
   t2 = MPI_Wtime()
-  call print_halo_timings
-  if(ranktot .eq. 0) print *,'time per exchange =',nint((t2-t1) * 100000.0),' microseconds'
+  call MPI_Barrier(MPI_COMM_WORLD,ier)
+  do i = 0, petot-1, petot/16
+    if(ranktot .eq. i) call RPN_COMM_print_halo_timings
+  enddo
+  call MPI_Barrier(MPI_COMM_WORLD,ier)
   if(printit) then
     do m = sizey-1, 0, -1
     do l = 0, sizex -1
       if(ranktot .eq. l+m*sizex)then
-	print *,"PE(",rankx,',',ranky,')'
+	write(6,*)"PE(",rankx,',',ranky,')'
 	do j=NJ+haloy,1-haloy,-1
 	  print 1,z(:,j,1)
 	enddo
@@ -302,7 +318,10 @@ program test_simple_halo
   enddo
   enddo
   enddo
-  if(errors .ne. 0) print *,'rank, ERRORS =',ranktot, errors
+  call flush(6)
+  call MPI_Barrier(MPI_COMM_WORLD,ier)
+  if(ranktot .eq. 0) write(6,*)'time per exchange =',nint((t2-t1) * 100000.0),' microseconds'
+  if(errors .ne. 0) write(6,*)'rank, ERRORS =',ranktot, errors
 777 continue
   call MPI_Finalize(ier)
 1 format(20I10.9)
