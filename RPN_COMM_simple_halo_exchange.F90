@@ -14,10 +14,12 @@
 module RPN_COMM_halo_cache
   integer, save :: gridcom, rowcom, colcom
   integer, save :: rankx, ranky, sizex, sizey
-  integer(kind=8), dimension(8) :: ts = [0,0,0,0,0,0,0,0]
+  integer, parameter :: NTS = 9
+  integer(kind=8), dimension(NTS) :: ts = [0,0,0,0,0,0,0,0,0]
   integer, save :: nhalo = 0
   logical, save :: redblack = .false.  ! if true, use fully synchronous (send, recv, no sendrecv) method
   logical, save :: async    = .false.  ! if true, use fully asynchronous (isend, irecv)  method
+  logical, save :: barrier  = .false.  ! if true, use a barrier between E-W and N-S exchanges
 end module RPN_COMM_halo_cache
 
 function RPN_COMM_get_halo_timings(t,n) result(nt)
@@ -28,9 +30,9 @@ function RPN_COMM_get_halo_timings(t,n) result(nt)
   integer :: nt
   t(1:n) = -1
   nt = -1
-  if(n < 8) return
+  if(n < NTS) return
   nt = nhalo
-  t(1:8) = ts
+  t(1:NTS) = ts
 end function RPN_COMM_get_halo_timings
 
 subroutine RPN_COMM_reset_halo_timings
@@ -46,27 +48,28 @@ subroutine RPN_COMM_print_halo_timings
   include 'mpif.h'
   integer(kind=8), dimension(:,:), allocatable :: allts
   integer :: ier, ntot, i
-  integer(kind=8), dimension(8) :: tsavg, tsmax, tsmin
+  integer(kind=8), dimension(NTS) :: tsavg, tsmax, tsmin
   ntot = sizex*sizey
   if(rankx == 0 .and. ranky == 0) then
-    allocate(allts(8,ntot))
+    allocate(allts(NTS,ntot))
   else
-    allocate(allts(8,1))
+    allocate(allts(NTS,1))
   endif
-  call MPI_Gather(ts, 8, MPI_INTEGER8, allts, 8, MPI_INTEGER8, 0, gridcom, ier)
-  do i = 1, 8
+  call MPI_Gather(ts, NTS, MPI_INTEGER8, allts, NTS, MPI_INTEGER8, 0, gridcom, ier)
+  do i = 1, NTS
     tsavg(i) = sum(allts(i,:))
     tsmax(i) = maxval(allts(i,:))
     tsmin(i) = minval(allts(i,:))
   enddo
   tsavg = tsavg / ntot
   if(rankx == 0 .and. ranky == 0) then
-    write(6,1)'nhalo, avg times =     nexch    peel-J    mesg-x    plug-J    peel-I    mesg-y    plug-I    exch-x    exch-y'
+    write(6,1)'nhalo, avg times =     nexch    peel-J    mesg-x    plug-J    peel-I    mesg-y    plug-I    exch-x    exch-y    barrier'
     write(6,1)'nhalo, avg times =',nhalo,tsavg/nhalo
     write(6,1)'min times        =          ',tsmin/nhalo
     write(6,1)'max times        =          ',tsmax/nhalo
     call flush(6)
   endif
+  deallocate(allts)
   
 1 format(a,10I10)
 end subroutine RPN_COMM_print_halo_timings
@@ -87,6 +90,7 @@ subroutine RPN_COMM_simple_halo_parms(grid, row, col, mode)
   call MPI_comm_rank(colcom, ranky, ier)  ! rank in column
   redblack = trim(mode) .eq. 'REDBLACK'
   async    = trim(mode) .eq. 'ASYNC'
+  barrier  = trim(mode) .eq. 'BARRIER'
   if(rankx+ranky == 0) write(6,*) 'MODE = '//trim(mode)
   return
 end subroutine RPN_COMM_simple_halo_parms
@@ -132,11 +136,12 @@ subroutine RPN_COMM_simple_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy)
 
   t = 0
   nhalo = nhalo + 1
-!   call mpi_barrier(gridcom, ier)
+  t(1) = cpu_real_time_ticks()
+  t(2) = t(1)
+  t(3) = t(1)
+  t(4) = t(1)
   if(sizex .gt. 1) then   ! is there an exchange along x ?
-!     call MPI_Barrier(rowcom,ier)
     nw = halox * lnj * nk       ! message length
-    t(1) = cpu_real_time_ticks()
     do k = 1, nk          ! peel west and east side of array simultaneously
     do j = 1, lnj
       halo_to_west(:,j,k) = g(1:halox        ,j,k)    ! extract west side inner halo
@@ -169,9 +174,12 @@ subroutine RPN_COMM_simple_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy)
     enddo
     t(4) = cpu_real_time_ticks()
   endif
+  if(barrier) call MPI_Barrier(colcom, ier)
+  t(5) = cpu_real_time_ticks()
+  t(6) = t(5)
+  t(7) = t(5)
+  t(8) = t(5)
   if(sizey .gt. 1) then   ! is there an exchange along y ?
-!     call MPI_Barrier(colcom, ier)
-    t(5) = cpu_real_time_ticks()
     nw = (lni + 2*halox) * haloy * nk
     do k = 1, nk          ! peel north and south side of array
     do j = 1, haloy
@@ -209,6 +217,7 @@ subroutine RPN_COMM_simple_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy)
   ts(4:6) = ts(4:6) + t(6:8)-t(5:7)
   ts(7) = ts(7) + t(4) - t(1)
   ts(8) = ts(8) + t(8) - t(5)
+  ts(9) = t(5) - t(4)
 end subroutine RPN_COMM_simple_halo
 #endif
 #if defined(SELF_TEST)
@@ -228,7 +237,7 @@ program test_simple_halo
   integer :: i, j, k, offx, offy, l, m, larg1, larg2, larg3, stat1, stat2, stat3, rowcomm, colcomm
   integer :: ilo, ihi, jlo, jhi
   character(len=128) :: argv1, argv2, argv3, mode
-  logical :: printit, redblack, yfirst, async
+  logical :: printit, redblack, yfirst, async, barrier
   real(kind=8) :: t1, t2
   real(kind=8), dimension(NXCH) :: txch
 
@@ -246,12 +255,14 @@ program test_simple_halo
     printit  = argv3(1:1) .eq. 't'  ! print arrays
     redblack = argv3(2:2) .eq. 'r'  ! use red/black method
     async    = argv3(2:2) .eq. 'a'  ! use async method
+    barrier  = argv3(2:2) .eq. 'b'  ! activate barrier between E-W and N-S
     yfirst   = argv3(3:3) .eq. 'y'  ! y first, then x
   else
-    argv3 = 't'
+    argv3 = 't'  ! this will activate the rnak printout
   endif
   if(redblack) mode = 'REDBLACK'
   if(async)    mode = 'ASYNC'
+  if(barrier)  mode = 'BARRIER'
   printit = printit .and. ni*nj < 30
 
   allocate (z(1-halox:NI+halox,1-haloy:NJ+haloy,NK))
@@ -260,6 +271,7 @@ program test_simple_halo
   call MPI_comm_rank(MPI_COMM_WORLD, ranktot, ier)
   if(sizex*sizey .ne. petot) goto 777
   if(ranktot == 0) write(6,*)'redblack =',redblack
+  if(ranktot == 0) write(6,2)'sizex,sizey,NI,NJ,NK,halox,haloy=',sizex,sizey,NI,NJ,NK,halox,haloy
   if(yfirst) then
     rankx = ranktot / sizey
     ranky = mod(ranktot,sizey)
