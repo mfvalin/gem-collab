@@ -146,9 +146,9 @@ subroutine RPN_COMM_split_by_socket(origcomm, nodecomm, sockcomm, peercomm, node
     nnuma = 2
   endif
 !
-  call MPI_comm_size(nodecomm, numapop, ierr)    ! node population
-  numapop = numapop / nnuma                      ! numa space population
-  socket = noderank / numapop                    ! temporary, will use numa_node_of_cpu()
+  call MPI_comm_size(nodecomm, numapop, ierr)       ! node population
+  numapop = ceiling (float(numapop) / float(nnuma)) ! numa space population
+  socket = noderank / numapop                       ! temporary, will use numa_node_of_cpu()
 !
   call mpi_comm_split(nodecomm, socket, noderank, sockcomm, ierr)  ! re split by socket
   if(ierr .ne. MPI_SUCCESS) return
