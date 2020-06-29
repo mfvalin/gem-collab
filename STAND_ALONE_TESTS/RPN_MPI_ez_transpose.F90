@@ -117,6 +117,13 @@ module RPN_MPI_transpose_mod
   integer, save :: npey = 0                                       ! number of PEs in a column
   integer, save :: rowcom = MPI_COMM_NULL                         ! row communicator
   integer, save :: colcom = MPI_COMM_NULL                         ! column communicator
+  integer, save :: rowrank= 999999
+  integer, save :: colrank= 999999
+  integer, save :: moxz = 1                                       ! default module for staggered alltoall is 1
+  integer, save :: moxy = 1                                       ! default module for staggered alltoall is 1
+  integer, parameter :: MAXTMG = 8
+  real(kind=8), dimension(4,MAXTMG), save :: times
+  integer, dimension(4), save :: counts = [0, 0, 0, 0]
  contains
   subroutine RPN_MPI_transpose_alloc(m)
     implicit none
@@ -131,6 +138,17 @@ module RPN_MPI_transpose_mod
     return
   end subroutine RPN_MPI_transpose_alloc
 end module RPN_MPI_transpose_mod
+
+subroutine RPN_MPI_print_transpose_times
+  use ISO_C_BINDING
+  use RPN_MPI_transpose_mod
+  implicit none
+  write(0,1) 'fwd xz :',times(1,:)
+  write(0,1) 'inv xz :',times(2,:)
+  write(0,1) 'fwd xy :',times(3,:)
+  write(0,1) 'inv xy :',times(4,:)
+1 format(A,8F10.6)
+end subroutine RPN_MPI_print_transpose_times
 
 !****f* rpn_mpi/RPN_MPI_transpose_setup setup routine for EZ transposes
 ! DESCRIPTION
@@ -163,6 +181,7 @@ end module RPN_MPI_transpose_mod
   nk     = gnk
   rowcom = row_comm
   call MPI_Comm_size(rowcom, m, ierr)                ! get size of row coumunicator
+  call MPI_Comm_rank(rowcom, rowrank, ierr)          ! rank in row
   if(npex < m) call RPN_MPI_transpose_alloc(m)       ! allocate arrays if not large enough
   npex   = m
   call MPI_Allgather(lnkx, 1, MPI_INTEGER, countnk, 1, MPI_INTEGER, rowcom, ierr) ! get lnk counts
@@ -174,6 +193,7 @@ end module RPN_MPI_transpose_mod
 
   colcom = col_comm
   call MPI_Comm_size(colcom, npey, ierr)             ! get size of column coumunicator
+  call MPI_Comm_rank(colcom, colrank, ierr)          ! rank in column
 
   return
  end subroutine RPN_MPI_transpose_setup                                  !InTf!
@@ -259,19 +279,30 @@ end module RPN_MPI_transpose_mod
 !******
 
   integer :: n
-  integer :: i, j, k, m
+  integer :: i, j, k, m, ix, slot
 
   ierr = MPI_ERROR
   if(npex == 0 .or. row_comm .ne. rowcom .or. nk .ne. gnk) then  ! initialize or reinitialize ?
     nk = gnk
     rowcom = row_comm
-    call MPI_Comm_size(rowcom, m, ierr)                ! get size of coumunicator
+    call MPI_Comm_size(rowcom, m, ierr)                ! get size of row coumunicator
+    call MPI_Comm_rank(rowcom, rowrank, ierr)          ! rank in row
     if(npex < m) call RPN_MPI_transpose_alloc(m)       ! allocate arrays if not large enough
     npex = m                                           ! new array dimension
     call MPI_Allgather(lnkx, 1, MPI_INTEGER, countnk, 1, MPI_INTEGER, rowcom, ierr) ! get lnk counts
     if(sum(countnk(1:npex)) .ne. gnk) goto 222         ! ERROR, missing or extra levels
   endif
 
+  if(forward) then
+    slot = 1
+  else
+    slot = 2
+  endif
+  ix = mod(counts(slot) + 1, MAXTMG)
+  counts(slot) = ix
+
+  times(slot,ix) = MPI_Wtime()
+  if(colcom .ne. MPI_COMM_NULL) moxz = 1               ! can be set to 2/4/... deactivated for now
   if(forward) then                                     ! z -> zt
     sendcount(1:npex) = countnk(1:npex) * lnix * lnjy  ! may be zero for some PEs
     recvcount(1:npex) = lnkx * lnix * lnjy             ! may be zero for this PE
@@ -281,8 +312,14 @@ end module RPN_MPI_transpose_mod
       senddispl(n) = sendcount(n-1) + senddispl(n-1)
       recvdispl(n) = recvcount(n-1) + recvdispl(n-1)
     enddo
-    call MPI_Alltoallv(z , sendcount, senddispl, MPI_INTEGER,               &
-                       zt, recvcount, recvdispl, MPI_INTEGER, rowcom, ierr)
+    do m = 0 , moxz - 1                                ! perform alltoall by goups of rows to reduce traffic
+      if(mod(colrank,moxz) == m) then
+	call MPI_Alltoallv(z , sendcount, senddispl, MPI_INTEGER,               &
+			  zt, recvcount, recvdispl, MPI_INTEGER, rowcom, ierr)
+      endif
+      if(moxz > 1) call MPI_Barrier(colcom, ierr)
+!if(moxz > 1) write(0,*)'barrier xz moxz =',moxz
+    enddo
   else                                                 ! zt -> z
     sendcount(1:npex) = lnkx * lnix * lnjy             ! may be zero for this PE
     recvcount(1:npex) = countnk(1:npex) * lnix * lnjy  ! may be zero for some PEs
@@ -290,9 +327,16 @@ end module RPN_MPI_transpose_mod
       senddispl(n) = sendcount(n-1) + senddispl(n-1)
       recvdispl(n) = recvcount(n-1) + recvdispl(n-1)
     enddo
-    call MPI_Alltoallv(zt, sendcount, senddispl, MPI_INTEGER,               &
-                       z , recvcount, recvdispl, MPI_INTEGER, rowcom, ierr)
+    do m = 0 , moxz - 1
+      if(mod(colrank,moxz) == m) then
+	call MPI_Alltoallv(zt, sendcount, senddispl, MPI_INTEGER,               &
+			  z , recvcount, recvdispl, MPI_INTEGER, rowcom, ierr)
+      endif
+      if(moxz > 1) call MPI_Barrier(colcom, ierr)
+!if(moxz > 1) write(0,*)'barrier xz moxz =',moxz
+    enddo
   endif
+  times(slot,ix) = MPI_Wtime() - times(slot,ix)
 
 1 return
 222 continue
@@ -382,21 +426,39 @@ end module RPN_MPI_transpose_mod
 !******
 
   integer :: n
-  integer :: i, j, k, m
+  integer :: i, j, k, m, ix, slot
 
   ierr = MPI_ERROR
   if(npey == 0 .or. col_comm .ne. colcom) then   ! update/initialize internal tables if necessary
     colcom = col_comm
     call MPI_Comm_size(colcom, npey, ierr)
+    call MPI_Comm_rank(colcom, colrank, ierr)
   endif
 
-  if(forward) then                                     ! z -> zt
-    call MPI_Alltoall(z , lniy*lnjy*lnkx, MPI_INTEGER,               &
-                      zt, lniy*lnjy*lnkx, MPI_INTEGER, colcom, ierr)
-  else                                                 ! zt -> z
-    call MPI_Alltoall(zt, lniy*lnjy*lnkx, MPI_INTEGER,               &
-                      z , lniy*lnjy*lnkx, MPI_INTEGER, colcom, ierr)
+  if(rowcom .ne. MPI_COMM_NULL) moxy = 1         ! can be set to 2/4/... deactivated for now
+  if(forward) then
+    slot = 3
+  else
+    slot = 4
   endif
+  ix = mod(counts(slot) + 1, MAXTMG)
+  counts(slot) = ix
+
+  times(slot,ix) = MPI_Wtime()
+  do m = 0, moxy-1                                ! perform alltoall by goups of columns to reduce traffic
+    if(mod(rowrank,moxy) == m) then
+      if(forward) then                                     ! z -> zt
+	call MPI_Alltoall(z , lniy*lnjy*lnkx, MPI_INTEGER,               &
+			  zt, lniy*lnjy*lnkx, MPI_INTEGER, colcom, ierr)
+      else                                                 ! zt -> z
+	call MPI_Alltoall(zt, lniy*lnjy*lnkx, MPI_INTEGER,               &
+			  z , lniy*lnjy*lnkx, MPI_INTEGER, colcom, ierr)
+      endif
+    endif
+    if(moxy > 1) call MPI_Barrier(rowcom, ierr)
+! if(moxy > 1) write(0,*)'barrier xy moxy =',moxy
+  enddo
+  times(slot,ix) = MPI_Wtime() - times(slot,ix)
 
 1 return
  end subroutine RPN_MPI_transpose_xy !InTf!

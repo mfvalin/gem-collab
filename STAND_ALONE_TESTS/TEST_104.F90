@@ -26,6 +26,8 @@ subroutine rpn_mpi_test_104
   integer(kind=8), dimension(:,:,:,:), allocatable :: zt, zy, zty
   integer :: row_comm, col_comm
   integer :: myrow, mycol
+  real(kind=8) :: time1, time2, time3, time4, time5
+  real(kind=8), external :: MPI_Wtime
 
   call MPI_Init(ier)
 
@@ -100,12 +102,21 @@ subroutine rpn_mpi_test_104
 ! conditional ez transpose setup call
 !
   if(ez .ne. 0) call RPN_MPI_transpose_setup(gnk, lnk, row_comm, col_comm, ier)
+!   if(ez .eq. 0) call RPN_MPI_transpose_setup(gnk, lnk, row_comm, col_comm, ier)
 !
 ! fwd x, fwd y, inverse y, inverse x transposes (lni values are doubled because z is integer*8)
 !
+  time1 = MPI_Wtime()
+  if(ez .eq. 0) call RPN_MPI_transpose_xz(LoC(z), LoC(zt), .true., lnimax*2, lnjmax, gnk, lnk, row_comm, ier)
+  if(ez .eq. 0) call RPN_MPI_transpose_xz(LoC(z), LoC(zt), .true., lnimax*2, lnjmax, gnk, lnk, row_comm, ier)
+  if(ez .eq. 0) call RPN_MPI_transpose_xz(LoC(z), LoC(zt), .true., lnimax*2, lnjmax, gnk, lnk, row_comm, ier)
   if(ez .eq. 0) call RPN_MPI_transpose_xz(LoC(z), LoC(zt), .true., lnimax*2, lnjmax, gnk, lnk, row_comm, ier)
 ! use ez call if setup has been performed by RPN_MPI_transpose_setup
   if(ez .ne. 0) call RPN_MPI_ez_transpose_xz(LoC(z), LoC(zt), .true., lnimax*2, lnjmax, lnk, ier)
+  if(ez .ne. 0) call RPN_MPI_ez_transpose_xz(LoC(z), LoC(zt), .true., lnimax*2, lnjmax, lnk, ier)
+  if(ez .ne. 0) call RPN_MPI_ez_transpose_xz(LoC(z), LoC(zt), .true., lnimax*2, lnjmax, lnk, ier)
+  if(ez .ne. 0) call RPN_MPI_ez_transpose_xz(LoC(z), LoC(zt), .true., lnimax*2, lnjmax, lnk, ier)
+  time1 = MPI_Wtime() - time1
 
 ! reshape (lnix,lnjy,lnkx,npex) -> (lniy,lnjy,lnkx,npey)
   do k = 1,lnk
@@ -123,13 +134,26 @@ subroutine rpn_mpi_test_104
   enddo
   enddo
 
+  time2 = MPI_Wtime()
+  if(ez .eq. 0) call RPN_MPI_transpose_xy(LoC(zy), LoC(zty), .true.,  lnimaxy*2, lnjmax, lnk, col_comm, ier)
+  if(ez .eq. 0) call RPN_MPI_transpose_xy(LoC(zy), LoC(zty), .true.,  lnimaxy*2, lnjmax, lnk, col_comm, ier)
+  if(ez .eq. 0) call RPN_MPI_transpose_xy(LoC(zy), LoC(zty), .true.,  lnimaxy*2, lnjmax, lnk, col_comm, ier)
   if(ez .eq. 0) call RPN_MPI_transpose_xy(LoC(zy), LoC(zty), .true.,  lnimaxy*2, lnjmax, lnk, col_comm, ier)
 ! use ez call if setup has been performed by RPN_MPI_transpose_setup
   if(ez .ne. 0) call RPN_MPI_ez_transpose_xy(LoC(zy), LoC(zty), .true.,  lnimaxy*2, lnjmax, lnk, ier)
+  if(ez .ne. 0) call RPN_MPI_ez_transpose_xy(LoC(zy), LoC(zty), .true.,  lnimaxy*2, lnjmax, lnk, ier)
+  if(ez .ne. 0) call RPN_MPI_ez_transpose_xy(LoC(zy), LoC(zty), .true.,  lnimaxy*2, lnjmax, lnk, ier)
+  if(ez .ne. 0) call RPN_MPI_ez_transpose_xy(LoC(zy), LoC(zty), .true.,  lnimaxy*2, lnjmax, lnk, ier)
+  time2 = MPI_Wtime() - time2
   zy = 0
 !   call RPN_MPI_transpose_xy(LoC(zy), LoC(zty), .false., lnimaxy*2, lnjmax, lnk, col_comm, ier)
 ! use ez call because previous RPN_MPI_transpose_xy has performed initialization
+  time3 = MPI_Wtime()
   call RPN_MPI_ez_transpose_xy(LoC(zy), LoC(zty), .false., lnimaxy*2, lnjmax, lnk, ier)
+  call RPN_MPI_ez_transpose_xy(LoC(zy), LoC(zty), .false., lnimaxy*2, lnjmax, lnk, ier)
+  call RPN_MPI_ez_transpose_xy(LoC(zy), LoC(zty), .false., lnimaxy*2, lnjmax, lnk, ier)
+  call RPN_MPI_ez_transpose_xy(LoC(zy), LoC(zty), .false., lnimaxy*2, lnjmax, lnk, ier)
+  time3 = MPI_Wtime() - time3
 
 ! reshape (lniy,lnjy,lnkx,npey) -> (lnix,lnjy,lnkx,npex)
   do k = 1,lnk
@@ -150,7 +174,12 @@ subroutine rpn_mpi_test_104
   z2 = 0
 !   call RPN_MPI_transpose_xz(LoC(z2), LoC(zt), .false., lnimax*2, lnjmax, gnk, lnk, row_comm, ier)
 ! use ez call because previous RPN_MPI_transpose_xz has performed initialization
+  time4 = MPI_Wtime()
   call RPN_MPI_ez_transpose_xz(LoC(z2), LoC(zt), .false., lnimax*2, lnjmax, lnk, ier)
+  call RPN_MPI_ez_transpose_xz(LoC(z2), LoC(zt), .false., lnimax*2, lnjmax, lnk, ier)
+  call RPN_MPI_ez_transpose_xz(LoC(z2), LoC(zt), .false., lnimax*2, lnjmax, lnk, ier)
+  call RPN_MPI_ez_transpose_xz(LoC(z2), LoC(zt), .false., lnimax*2, lnjmax, lnk, ier)
+  time4 = MPI_Wtime() - time4
   if(gni <= 16) then
     write(0,*) 'after inverse x transpose'
     do j = lnj,1,-1
@@ -167,6 +196,8 @@ subroutine rpn_mpi_test_104
   enddo
   enddo
   write(0,*) 'errors =',errors
+!   if(rank == 0) write(0,3) 'times =', time1, time2, time3, time4
+  if(rank == 0) call RPN_MPI_print_transpose_times
 
 1 call MPI_Finalize(ier)
   return
@@ -175,4 +206,5 @@ subroutine rpn_mpi_test_104
   write(0,*) 'ERROR in arguments'
   goto 1
 2 format(30I10.9)
+3 format(A,10F10.6)
 end subroutine rpn_mpi_test_104
