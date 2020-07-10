@@ -1,4 +1,5 @@
 interface
+#if ! defined(IN_RPN_COMM_barrier)
 
       SUBROUTINE RPN_COMM_barrier(com,ierr)                    
       implicit none                                            
@@ -11,21 +12,29 @@ interface
       integer , intent(IN) :: nvalues                                                              
       real(kind=kind(1.d0)), dimension(nvalues), intent(OUT) :: values                                           
       end function RPN_COMM_barrier_data                                            
+#endif
+#if ! defined(IN_RPN_COMM_colors)
 
       integer function RPN_COMM_colors(comm)         
       implicit none                                  
       character(len=*) :: comm                       
       end function RPN_COMM_colors                    
+#endif
+#if ! defined(IN_RPN_COMM_comm)
 
       integer function RPN_COMM_comm(com)                    
       implicit none                                 
       character(len=*), intent(IN) :: com           
       end function RPN_COMM_comm                                  
+#endif
+#if ! defined(IN_RPN_COMM_finalize)
 
       SUBROUTINE RPN_COMM_finalize(ierr) 
       implicit none                      
       integer, intent(OUT) ::  ierr      
       end SUBROUTINE RPN_COMM_finalize         
+#endif
+#if ! defined(IN_RPN_COMM_init)
 
 
       SUBROUTINE RPN_COMM_init(Userinit,Pelocal,Petotal,Pex,Pey)     
@@ -59,6 +68,8 @@ interface
       integer, intent(IN) :: seconds  
       integer :: seconds_since  
       end function RPN_COMM_set_timeout_alarm_x                             
+#endif
+#if ! defined(IN_RPN_COMM_limit)
 
       integer function RPN_COMM_limit_2 &                           
          (my_id, npe, gmin, gmax, lmini,lmaxi,count, offset,relax)  
@@ -75,12 +86,16 @@ interface
       integer, intent(OUT) :: lmini,lmaxi                  
       integer, intent(OUT) :: count(npe),offset(npe)       
       end function RPN_COMM_limit                          
+#endif
+#if ! defined(IN_RPN_COMM_low2up)
 
       SUBROUTINE RPN_COMM_UP2LOW(S1,S2)                
       implicit none                                    
       character (len=*), intent(IN) :: S1              
       character (len=*), intent(OUT) :: S2             
       END SUBROUTINE RPN_COMM_UP2LOW               
+#endif
+#if ! defined(IN_RPN_COMM_rank)
 
       SUBROUTINE RPN_COMM_rank( com, rank ,ierr )                   
       implicit none                                                 
@@ -88,12 +103,16 @@ interface
       integer, intent(out) :: rank                                  
       integer, intent(out) :: ierr                                  
       end SUBROUTINE RPN_COMM_rank                                 
+#endif
+#if ! defined(IN_RPN_COMM_size)
 
       SUBROUTINE RPN_COMM_size( com, size ,ierr ) 
       implicit none                                 
       integer, intent(OUT) :: ierr,size             
       character(len=*), intent(IN) ::  com          
       end SUBROUTINE RPN_COMM_size                  
+#endif
+#if ! defined(IN_RPN_MPI_distribute)
 
       subroutine RPN_data_distribute(myrank, npe, gmin, gmax, lmin, lmax, count, offset, mode)    
       implicit none                                                
@@ -102,6 +121,8 @@ interface
       integer, intent(OUT) :: count(npe), offset(npe)               
       integer, intent(IN), optional ::  mode                        
       end subroutine RPN_data_distribute                               
+#endif
+#if ! defined(IN_RPN_MPI_ez_halo_exchange)
       subroutine RPN_MPI_halo(g,minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy,row,col) BIND(C,name='RPN_MPI_halo') 
       import :: RPN_MPI_Loc, RPN_MPI_Comm, C_INT                                          
       integer(C_INT), intent(IN)    :: minx,maxx,miny,maxy,lni,lnj,nk,halox,haloy          
@@ -138,6 +159,8 @@ interface
       type(RPN_MPI_Comm), intent(IN) :: row, col               
       character(len=1), dimension(*), intent(IN) :: mode        
       end subroutine RPN_MPI_ez_halo_parms                        
+#endif
+#if ! defined(IN_RPN_MPI_ez_transpose)
       subroutine RPN_MPI_transpose_setup(gnk, lnkx, row_comm, col_comm, ierr) 
       integer, intent(IN) :: row_comm, col_comm                              
       integer, intent(IN) :: gnk, lnkx                                       
@@ -173,15 +196,21 @@ interface
       integer, intent(IN) :: col_comm                               
       integer, intent(OUT) :: ierr                                  
       end subroutine RPN_MPI_transpose_xy 
+#endif
+#if ! defined(IN_RPN_MPI_finalize)
 
       SUBROUTINE RPN_MPI_finalize(ierr) 
       implicit none                      
       integer, intent(OUT) ::  ierr      
       end SUBROUTINE RPN_MPI_finalize         
+#endif
+#if ! defined(IN_RPN_MPI_get_a_free_unit)
       integer function RPN_MPI_get_a_free_unit()                   
       end function RPN_MPI_get_a_free_unit                         
       integer function RPN_COMM_get_a_free_unit()                   
       end function RPN_COMM_get_a_free_unit                         
+#endif
+#if ! defined(IN_RPN_MPI_get_mpi_definitions)
       subroutine RPN_MPI_get_mpi_definitions_raw(what, ierr)
       import :: RPN_MPI_mpi_definitions_raw                         
       type(RPN_MPI_mpi_definitions_raw), intent(INOUT) :: what       
@@ -204,6 +233,28 @@ interface
       type(mpi_layout), intent(INOUT) :: what                   
       integer(C_INT), intent(OUT) :: ierr                        
       end subroutine RPN_MPI_get_mpi_layout                        
+#endif
+#if ! defined(IN_RPN_MPI_grid_topo)
+      subroutine RPN_MPI_set_grid_topo(npex, npey, blkx, blky, x_first)   
+      integer, intent(IN) :: npex, npey                    
+      integer, intent(IN) :: blkx, blky                    
+      logical, intent(IN) :: x_first                       
+      end subroutine RPN_MPI_set_grid_topo                   
+      subroutine RPN_MPI_grid_topo(topo, npex, npey, blkx, blky, x_first, ierr)   
+      import :: RPN_MPI_Ftopo                             
+      type(RPN_MPI_Ftopo), intent(INOUT) :: topo           
+      integer, intent(IN) :: npex, npey                    
+      integer, intent(IN) :: blkx, blky                    
+      logical, intent(IN) :: x_first                       
+      integer, intent(OUT) :: ierr                         
+      end subroutine RPN_MPI_grid_topo                      
+      subroutine RPN_MPI_ez_grid_topo(topo, ierr)           
+      import :: RPN_MPI_Ftopo                            
+      type(RPN_MPI_Ftopo), intent(INOUT) :: topo          
+      integer, intent(OUT) :: ierr                        
+      end subroutine RPN_MPI_ez_grid_topo                   
+#endif
+#if ! defined(IN_RPN_MPI_init)
 
       INTEGER FUNCTION RPN_MPI_init &                                
          (Userinit,Pelocal,Petotal,Pex,Pey,MultiGrids,Grids,AppID,Io)   
@@ -216,6 +267,8 @@ interface
       character(len=*)       :: AppID                                
       integer, intent(in)    :: Io                                   
       end FUNCTION RPN_MPI_init                        
+#endif
+#if ! defined(IN_RPN_MPI_init_helpers)
 
       subroutine RPN_MPI_mydomain (call_back, mydomain)             
       external :: call_back                                          
@@ -238,6 +291,8 @@ interface
       function RPN_MPI_initialized() result(status)             
       logical ::  status                                        
       end function RPN_MPI_initialized                          
+#endif
+#if ! defined(IN_RPN_MPI_petopo)
 
       subroutine RPN_COMM_set_petopo(sizx,sizy)          
       implicit none                      
@@ -247,20 +302,31 @@ interface
       implicit none                      
       integer, intent(IN) :: sizx,sizy   
       end subroutine RPN_MPI_set_petopo                  
+
       integer function RPN_COMM_petopo(pex,pey)          
       integer, intent(IN) :: pex,pey                     
       end function RPN_COMM_petopo                       
 
-      integer function RPN_MPI_petopo(pex,pey)          
+!     legacy functionality for use in rpn_comm to rpn_mpi conversion 
+      integer function RPN_MPI_petopo(pex,pey)           
       implicit none                                      
       integer, intent(IN) :: pex,pey                     
       end function RPN_MPI_petopo                              
 
+!     legacy functionality for use in rpn_comm to rpn_mpi conversion 
       integer function RPN_MPI_get_pe(x,y,grd,sgrd,communicator) 
       implicit none                                                
       integer, intent(IN) :: x,y,grd,sgrd                          
-      character (len=*), intent(IN) :: communicator                   
-      end function RPN_MPI_get_pe                              
+      character (len=*), intent(IN) :: communicator                
+      end function RPN_MPI_get_pe                                  
+
+      integer function RPN_COMM_get_pe(x,y,grd,sgrd,communicator)  
+      implicit none                                                
+      integer, intent(IN) :: x,y,grd,sgrd                          
+      character (len=*), intent(IN) :: communicator                
+      end function RPN_COMM_get_pe                                 
+#endif
+#if ! defined(IN_RPN_MPI_set_timeout_alarm)
       function RPN_MPI_set_timeout_alarm(seconds) result(seconds_since)  
       integer, intent(IN) :: seconds  
       integer :: seconds_since  
@@ -269,6 +335,8 @@ interface
       integer, intent(IN) :: seconds  
       integer :: seconds_since  
       end function RPN_COMM_set_timeout_alarm                             
+#endif
+#if ! defined(IN_RPN_MPI_topology)
 
       integer function RPN_COMM_topo_2(nxg,minx,maxx,nxl,nxlmax,halo,nx0,alongx,fill,relax,abort) 
       implicit none                                                         
@@ -290,4 +358,5 @@ interface
       logical, intent(in) :: alongx,fill                                           
       integer, intent(out):: minx,maxx,nxl,nxlmax,nx0                              
       end function RPN_COMM_topo                                                 
+#endif
 end interface

@@ -70,8 +70,8 @@
 !                         |                                  ^
 !                         |                                  |
 !                         v                                  |
-! forward FFT(x) <------> dimension(gni,      lnjy,      lnkx)  <------> inverse FFT(x)
-!                             [ SHARED MEMORY on NUMA node]
+! forward FFT(x) <------> dimension(gni,  lnjy,  nnuma,  lnkx)  <------> inverse FFT(x)
+!                       [ SHARED MEMORY on NUMA node] (nnuma PEs)
 !                                            ^
 !                                            |
 !                                            v
@@ -79,7 +79,7 @@
 !
 ! example of usage
 !
-!   include 'RPN_MPI.inc'
+! #include 'RPN_MPI.hf'
 ! ! macro names are CASE SENSITIVE
 ! #define LoC(what) rpn_mpi_loc(loc(what))
 !

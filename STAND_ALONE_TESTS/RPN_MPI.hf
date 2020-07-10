@@ -1,0 +1,6 @@
+#include <RPN_MPI_mpi_symbols.inc>
+#include <RPN_MPI_mpi_layout.inc>
+#if 0
+#include <RPN_MPI_types_int.inc>
+#endif
+#include <RPN_MPI_interfaces.hf>

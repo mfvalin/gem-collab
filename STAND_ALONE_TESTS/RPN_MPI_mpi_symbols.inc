@@ -31,11 +31,17 @@
     integer :: wrapped_value
   end type RPN_MPI_Comm
 
-  type, BIND(C) :: RPN_MPI_Fcom    ! the Fortran comm trio, communicator, size, and rank
+  type, BIND(C) :: RPN_MPI_Fcom    ! the Fortran trio, wrapped communicator, size, and rank
     type(RPN_MPI_Comm) :: comm
     integer(C_INT)     :: size
     integer(C_INT)     :: rank
   end type RPN_MPI_Fcom
+
+  type, BIND(C) :: RPN_MPI_csr     ! the Fortran trio, communicator, size, and rank
+    integer(C_INT)     :: comm
+    integer(C_INT)     :: size
+    integer(C_INT)     :: rank
+  end type RPN_MPI_csr
 
   type, BIND(C) :: RPN_MPI_Datatype
     integer :: wrapped_value

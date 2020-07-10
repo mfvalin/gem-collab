@@ -254,4 +254,20 @@
     type(mpigrid_f)     :: grid        ! basic computation grid
     type(subgrid_f)     :: blck        ! block of PEs inside a grid (subgrid)
   end type mpi_layout_f
+!================================================================================================
+! PE topologies within a grid/subgrid
+
+  type, BIND(C) :: RPN_MPI_Ftopo   ! 2D grid topology with RPNMPI (wrapped) communicators
+    integer :: version = mpi_symbols_version
+    type(RPN_MPI_Fcom) :: grd      ! the 2D grid
+    type(RPN_MPI_Fcom) :: row      ! the grid row
+    type(RPN_MPI_Fcom) :: col      ! the grid column
+  end type RPN_MPI_Ftopo
+
+  type, BIND(C) :: RPN_MPI_topo    ! 2D grid topology with integer MPI communicators
+    integer :: version = mpi_symbols_version
+    type(RPN_MPI_csr) :: grd       ! the 2D grid
+    type(RPN_MPI_csr) :: row       ! the grid row
+    type(RPN_MPI_csr) :: col       ! the grid column
+  end type RPN_MPI_topo
 

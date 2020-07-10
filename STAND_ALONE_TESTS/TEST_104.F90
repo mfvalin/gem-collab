@@ -11,7 +11,7 @@ subroutine rpn_mpi_test_104
 !
   use ISO_C_BINDING
   implicit none
-  include 'RPN_MPI.inc'
+#include <RPN_MPI.hf>
 #define LoC(what) rpn_mpi_loc(loc(what))
 !   include 'RPN_MPI_mpif.inc'
 
